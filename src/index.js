@@ -1,5 +1,6 @@
 ﻿require('dotenv').config();
 
+const fs = require('fs');
 const path = require("path");
 
 const { Telegraf, Markup } = require('telegraf');
@@ -10,6 +11,7 @@ const LEADS_CHAT_ID = Number(process.env.LEADS_CHAT_ID || 0);
 const MARINA_CHAT_URL = 'https://t.me/Mrs_Mishagina';
 const DB_PATH = process.env.DB_PATH || './data/db.sqlite';
 const START_PHOTO = process.env.START_PHOTO || '';
+const FINAL_PHOTO = (process.env.FINAL_PHOTO || '').trim();
 
 if (!BOT_TOKEN) {
   throw new Error('BOT_TOKEN is required');
@@ -84,7 +86,16 @@ const QUESTIONS = [
     ]
   }
 ];
-
+try {
+  const photoPath = path.resolve(__dirname, '../assets/marina.jpg');
+  if (fs.existsSync(photoPath)) {
+    await ctx.replyWithPhoto({ source: photoPath });
+  } else {
+    console.warn('[final-photo] file not found:', photoPath);
+  }
+} catch (err) {
+  console.error('[final-photo] send failed:', err?.message);
+}
 const FINAL_TEXT = [
   '✨ Спасибо, что прошла мини-тест.',
   '',
@@ -148,6 +159,7 @@ function getSession(userId) {
       lastIntroChatId: null,
       lastBotMessagesToCleanup: [],
       leadSent: false,
+      consultButtonHidden: false,
       hasSeenIntro: false,
       pendingFinalTimer: null,
       finalScheduled: false,
@@ -171,6 +183,7 @@ function resetSessionForRestart(session) {
   session.lastQuestionChatId = null;
   session.lastBotMessagesToCleanup = [];
   session.leadSent = false;
+  session.consultButtonHidden = false;
   session.finalScheduled = false;
   session.finalResultSent = false;
   session.dbSessionId = null;
@@ -209,6 +222,22 @@ async function safeSendPhoto(chatId, photo, caption, extra, tag) {
     console.error(`[${tag}] sendPhoto failed`, { chatId, error: err.message });
     return null;
   }
+}
+
+function getFinalPhotoInput() {
+  if (FINAL_PHOTO) {
+    if (/^https?:\/\//i.test(FINAL_PHOTO)) {
+      return FINAL_PHOTO;
+    }
+    return { source: path.resolve(FINAL_PHOTO) };
+  }
+
+  const defaultFinalPhotoPath = path.resolve(__dirname, '../assets/marina.jpg');
+  if (fs.existsSync(defaultFinalPhotoPath)) {
+    return { source: defaultFinalPhotoPath };
+  }
+
+  return null;
 }
 
 async function safeAnswerCallback(ctx, text) {
@@ -258,13 +287,15 @@ function startQuizKeyboard() {
   return Markup.inlineKeyboard([[Markup.button.callback('Пройти мини-тест ✅', 'start_quiz')]]);
 }
 
-function finalKeyboard() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('Записаться на консультацию', 'final_book')],
-    [Markup.button.callback('Вопрос специалисту', 'final_question')],
-    [Markup.button.callback('Я подумаю', 'final_think')],
-    [Markup.button.callback('Пройти тест заново', 'restart_quiz')]
-  ]);
+function finalKeyboard(afterConsultClick = false) {
+  const rows = [];
+  if (!afterConsultClick) {
+    rows.push([Markup.button.callback('Записаться на консультацию', 'final_book')]);
+  }
+  rows.push([Markup.button.callback('Вопрос специалисту', 'final_question')]);
+  rows.push([Markup.button.callback('Я подумаю', 'final_think')]);
+  rows.push([Markup.button.callback('Пройти тест заново', 'restart_quiz')]);
+  return Markup.inlineKeyboard(rows);
 }
 
 function marinaLinkKeyboard() {
@@ -433,6 +464,20 @@ async function scheduleFinalResult(ctx, session) {
     session.finalScheduled = false;
     session.finalResultSent = true;
 
+    const finalPhotoInput = getFinalPhotoInput();
+    if (finalPhotoInput) {
+      await safeSendPhoto(ctx.chat.id, finalPhotoInput, undefined, undefined, 'final-photo');
+    }
+
+try {
+  const photoPath = path.resolve(__dirname, '../assets/marina.jpg');
+  if (fs.existsSync(photoPath)) {
+    await ctx.replyWithPhoto({ source: photoPath });
+  }
+} catch (err) {
+  console.error('Final photo send failed:', err.message);
+}
+
     const sent = await sendMessageWithRetry(ctx.chat.id, FINAL_TEXT, finalKeyboard(), 'final-result');
     if (!sent) {
       console.error('[final-result] failed after retries', { userId: ctx.from.id });
@@ -516,6 +561,20 @@ bot.action('final_book', async (ctx) => {
   session.lastFinalKeyboardChatId = ctx.chat?.id || null;
   session.lastFinalKeyboardMessageId = ctx.callbackQuery?.message?.message_id || null;
 
+  if (!session.consultButtonHidden && session.lastFinalKeyboardChatId && session.lastFinalKeyboardMessageId) {
+    session.consultButtonHidden = true;
+    try {
+      await bot.telegram.editMessageReplyMarkup(
+        session.lastFinalKeyboardChatId,
+        session.lastFinalKeyboardMessageId,
+        undefined,
+        finalKeyboard(true).reply_markup
+      );
+    } catch {
+      // ignore
+    }
+  }
+
   await safeAnswerCallback(ctx);
   await safeReply(ctx, 'Пожалуйста, введите ваш номер телефона, чтобы мы могли связаться с вами.', undefined, 'final-book-phone-request');
 });
@@ -581,20 +640,10 @@ bot.on('text', async (ctx) => {
     session.leadSent = true;
     session.awaitingPhone = false;
     session.pendingLeadAction = null;
-    if (typeof ctx.editMessageReplyMarkup === 'function') {
-      try {
-        await ctx.editMessageReplyMarkup(null);
-      } catch {
-        // ignore: text update usually cannot edit reply markup directly
-      }
-    }
-    if (session.lastFinalKeyboardChatId && session.lastFinalKeyboardMessageId) {
-      await safeClearKeyboard(session.lastFinalKeyboardChatId, session.lastFinalKeyboardMessageId);
-    }
     session.lastFinalKeyboardChatId = null;
     session.lastFinalKeyboardMessageId = null;
 
-    await safeReply(ctx, 'Спасибо! Я передала заявку. Специалист свяжется с вами.', undefined, 'consultation-phone-thanks');
+    await safeReply(ctx, 'Спасибо! Я передала заявку. Специалист свяжется с вами.', finalKeyboard(true), 'consultation-phone-thanks');
     return;
   }
 
