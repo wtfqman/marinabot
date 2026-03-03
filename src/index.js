@@ -89,6 +89,159 @@ const PHONE_STEP = QUESTIONS.length + 1;
 const FINAL_STEP = PHONE_STEP + 1;
 const PHONE_REQUEST_TEXT = 'Пожалуйста, оставьте ваш номер телефона, чтобы специалист мог с вами связаться.';
 
+const FINAL_TEXT = [
+  '✨ Спасибо, что прошла мини-тест.',
+  '',
+  'Я посмотрела твои ответы.',
+  '',
+  'И знаешь что интересно.',
+  '',
+  'Твоё тело не просит радикальных вещей. Оно скорее просит внимания и правильной поддержки.',
+  'И знаешь хорошую новость?',
+  'Большинство вещей, которые тебя беспокоят — реально корректируются, если работать с телом системно.',
+  '',
+  'Очень часто за этим стоят:',
+  '— застой лимфы',
+  '— отёки',
+  '— плотные зоны в тканях',
+  '— слабая микроциркуляция',
+  '',
+  'И именно с этим отлично работают аппаратные методики.',
+  '',
+  'Но есть важный момент.',
+  '',
+  'Я никогда не назначаю процедуры «вслепую”.',
+  'Потому что у каждой женщины тело реагирует по-разному.',
+  '',
+  'Поэтому первый шаг — спокойная консультация, где мы:',
+  '',
+  '• посмотрим качество тканей',
+  '• определим зоны отёка и напряжения',
+  '• сделаем замеры и фото (чтобы видеть реальный прогресс)',
+  '• проведём анализ состава тела на специальных весах',
+  '• исключим противопоказания',
+  '• и подберём курс процедур именно под твою задачу',
+  '',
+  'Без навязывания.',
+  'Без «пакетов любой ценой”.',
+  '',
+  'Просто понятный план для твоего тела.',
+  '',
+  'И возможно, именно через пару месяцев ты посмотришь в зеркало и увидишь:',
+  '',
+  '— более стройный силуэт',
+  '— подтянутый животик',
+  '— более плотную кожу',
+  '— одежду, которая сидит иначе',
+  '— и то самое чувство уверенности в себе',
+  '',
+  'Если откликается — нажми кнопку ниже.'
+].join('\n');
+
+const REACTIONS = ['Супер ✨', 'Поняла 😊', 'Отлично 💛', 'Идем дальше 👇'];
+const userSessions = new Map();
+
+function getSession(userId) {
+  if (!userSessions.has(userId)) {
+    userSessions.set(userId, {
+      step: 1,
+      answers: {},
+      lastQuestionMessageId: null,
+      lastQuestionChatId: null,
+      lastIntroMessageId: null,
+      lastIntroChatId: null,
+      lastBotMessagesToCleanup: [],
+      leadSent: false,
+      hasSeenIntro: false,
+      pendingFinalTimer: null,
+      finalScheduled: false,
+      finalResultSent: false,
+      dbSessionId: null
+    });
+  }
+
+  return userSessions.get(userId);
+}
+
+function resetSessionForRestart(session) {
+  if (session.pendingFinalTimer) {
+    clearTimeout(session.pendingFinalTimer);
+    session.pendingFinalTimer = null;
+  }
+
+  session.step = 1;
+  session.answers = {};
+  session.lastQuestionMessageId = null;
+  session.lastQuestionChatId = null;
+  session.lastBotMessagesToCleanup = [];
+  session.leadSent = false;
+  session.finalScheduled = false;
+  session.finalResultSent = false;
+  session.dbSessionId = null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function safeReply(ctx, text, extra, tag = 'safeReply') {
+  try {
+    return await ctx.reply(text, extra);
+  } catch (err) {
+    console.error(`[${tag}] reply failed`, {
+      userId: ctx?.from?.id,
+      chatId: ctx?.chat?.id,
+      error: err?.message
+    });
+    return null;
+  }
+}
+
+async function safeSendMessage(chatId, text, extra, tag) {
+  try {
+    return await bot.telegram.sendMessage(chatId, text, extra);
+  } catch (err) {
+    console.error(`[${tag}] sendMessage failed`, { chatId, error: err.message });
+    return null;
+  }
+}
+
+async function safeSendPhoto(chatId, photo, caption, extra, tag) {
+  try {
+    return await bot.telegram.sendPhoto(chatId, photo, { caption, ...extra });
+  } catch (err) {
+    console.error(`[${tag}] sendPhoto failed`, { chatId, error: err.message });
+    return null;
+  }
+}
+
+async function safeAnswerCallback(ctx, text) {
+  try {
+    await ctx.answerCbQuery(text);
+  } catch (err) {
+    console.error('[answerCbQuery] failed', {
+      userId: ctx?.from?.id,
+      error: err?.message
+    });
+  }
+}
+
+async function safeDeleteMessage(chatId, messageId) {
+  try {
+    await bot.telegram.deleteMessage(chatId, messageId);
+  } catch {
+    // ignore
+  }
+}
+
+async function safeClearKeyboard(chatId, messageId) {
+  try {
+    await bot.telegram.editMessageReplyMarkup(chatId, messageId, undefined, null);
+  } catch {
+    // ignore
+  }
+}
+
 function questionKeyboard(step) {
   const q = QUESTIONS[step - 1];
   const shortLabelsByStep = {
