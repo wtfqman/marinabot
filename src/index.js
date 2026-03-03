@@ -1,6 +1,7 @@
 ﻿require('dotenv').config();
 
 const path = require("path");
+
 const { Telegraf, Markup } = require('telegraf');
 const { Storage } = require('./storage');
 
@@ -84,159 +85,16 @@ const QUESTIONS = [
   }
 ];
 
-const FINAL_TEXT = [
-  '✨ Спасибо, что прошла мини-тест.',
-  '',
-  'Я посмотрела твои ответы.',
-  '',
-  'И знаешь что интересно.',
-  '',
-  'Твоё тело не просит радикальных вещей. Оно скорее просит внимания и правильной поддержки.',
-  'И знаешь хорошую новость?',
-  'Большинство вещей, которые тебя беспокоят — реально корректируются, если работать с телом системно.',
-  '',
-  'Очень часто за этим стоят:',
-  '— застой лимфы',
-  '— отёки',
-  '— плотные зоны в тканях',
-  '— слабая микроциркуляция',
-  '',
-  'И именно с этим отлично работают аппаратные методики.',
-  '',
-  'Но есть важный момент.',
-  '',
-  'Я никогда не назначаю процедуры «вслепую”.',
-  'Потому что у каждой женщины тело реагирует по-разному.',
-  '',
-  'Поэтому первый шаг — спокойная консультация, где мы:',
-  '',
-  '• посмотрим качество тканей',
-  '• определим зоны отёка и напряжения',
-  '• сделаем замеры и фото (чтобы видеть реальный прогресс)',
-  '• проведём анализ состава тела на специальных весах',
-  '• исключим противопоказания',
-  '• и подберём курс процедур именно под твою задачу',
-  '',
-  'Без навязывания.',
-  'Без «пакетов любой ценой”.',
-  '',
-  'Просто понятный план для твоего тела.',
-  '',
-  'И возможно, именно через пару месяцев ты посмотришь в зеркало и увидишь:',
-  '',
-  '— более стройный силуэт',
-  '— подтянутый животик',
-  '— более плотную кожу',
-  '— одежду, которая сидит иначе',
-  '— и то самое чувство уверенности в себе',
-  '',
-  'Если откликается — нажми кнопку ниже.'
-].join('\n');
-
-const REACTIONS = ['Супер ✨', 'Поняла 😊', 'Отлично 💛', 'Идем дальше 👇'];
-
-const userSessions = new Map();
-
-function getSession(userId) {
-  if (!userSessions.has(userId)) {
-    userSessions.set(userId, {
-      step: 1,
-      answers: {},
-      lastQuestionMessageId: null,
-      lastQuestionChatId: null,
-      lastIntroMessageId: null,
-      lastIntroChatId: null,
-      lastBotMessagesToCleanup: [],
-      leadSent: false,
-      hasSeenIntro: false,
-      pendingFinalTimer: null,
-      finalScheduled: false,
-      finalResultSent: false,
-      dbSessionId: null
-    });
-  }
-
-  return userSessions.get(userId);
-}
-
-function resetSessionForRestart(session) {
-  if (session.pendingFinalTimer) {
-    clearTimeout(session.pendingFinalTimer);
-    session.pendingFinalTimer = null;
-  }
-
-  session.step = 1;
-  session.answers = {};
-  session.lastQuestionMessageId = null;
-  session.lastQuestionChatId = null;
-  session.lastBotMessagesToCleanup = [];
-  session.leadSent = false;
-  session.finalScheduled = false;
-  session.finalResultSent = false;
-  session.dbSessionId = null;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function safeReply(ctx, text, extra, tag) {
-  try {
-    return await ctx.reply(text, extra);
-  } catch (err) {
-    console.error(`[${tag}] reply failed`, { userId: ctx.from?.id, chatId: ctx.chat?.id, error: err.message });
-    return null;
-  }
-}
-
-async function safeSendMessage(chatId, text, extra, tag) {
-  try {
-    return await bot.telegram.sendMessage(chatId, text, extra);
-  } catch (err) {
-    console.error(`[${tag}] sendMessage failed`, { chatId, error: err.message });
-    return null;
-  }
-}
-
-async function safeSendPhoto(chatId, photo, caption, extra, tag) {
-  try {
-    return await bot.telegram.sendPhoto(chatId, photo, { caption, ...extra });
-  } catch (err) {
-    console.error(`[${tag}] sendPhoto failed`, { chatId, error: err.message });
-    return null;
-  }
-}
-
-async function safeAnswerCallback(ctx, text) {
-  try {
-    await ctx.answerCbQuery(text);
-  } catch (err) {
-    console.error('[answerCbQuery] failed', { userId: ctx.from?.id, error: err.message });
-  }
-}
-
-async function safeDeleteMessage(chatId, messageId) {
-  try {
-    await bot.telegram.deleteMessage(chatId, messageId);
-  } catch {
-    // ignore
-  }
-}
-
-async function safeClearKeyboard(chatId, messageId) {
-  try {
-    await bot.telegram.editMessageReplyMarkup(chatId, messageId, undefined, null);
-  } catch {
-    // ignore
-  }
-}
+const PHONE_STEP = QUESTIONS.length + 1;
+const FINAL_STEP = PHONE_STEP + 1;
+const PHONE_REQUEST_TEXT = 'Пожалуйста, оставьте ваш номер телефона, чтобы специалист мог с вами связаться.';
 
 function questionKeyboard(step) {
   const q = QUESTIONS[step - 1];
   const shortLabelsByStep = {
-    1: ['Хочется больше стройности', 'Подтянуть кожу', 'Могу выглядеть лучше', 'Устала стесняться'],
+    1: ['Хочется больше стройности', 'Хочу подтянуть кожу', 'Могу выглядеть лучше', 'Устала стесняться'],
     2: ['Немного «наливается»', 'Ощущается тяжелее', 'Устаёт спина/поясница', 'Хочется больше тонуса'],
-    3: ['Да, и это расстраивает', 'Иногда замечаю', 'Раньше было проще', 'Можно лучше', 'Перестала пытаться'],
+    3: ['Да,и это расстраивает', 'Иногда замечаю', 'Раньше было проще', 'Можно лучше', 'Перестала пытаться'],
     4: ['Чувствую себя уверенно.', 'Есть зоны, которые прячу.', 'Выбираю фасоны посвободнее.', 'Думаю о том, как выгляжу.', 'То, что «безопасно»'],
     5: ['Чувствую уверенность в теле.', 'Всегда есть, что улучшить.', 'Иногда появляется скованность.', 'Думаю о несовершенствах и закрываюсь.'],
     7: ['Поддержать тело и сохранить форму.', 'Убрать тяжесть и отечность.', 'Понять, что подойдёт тебе.', 'Разобраться и получить план']
@@ -261,7 +119,7 @@ function finalKeyboard() {
 }
 
 function marinaLinkKeyboard() {
-  return Markup.inlineKeyboard([[Markup.button.url('Написать специалисту', MARINA_CHAT_URL)]]);
+  return Markup.inlineKeyboard([[Markup.button.url('Написать Марине', MARINA_CHAT_URL)]]);
 }
 
 function userLabel(from) {
@@ -283,6 +141,7 @@ function buildLeadSummary(from, answers, finalAction) {
     lines.push(`${i}) ${answers[`q${i}`] || '-'}`);
   }
 
+  lines.push(`📞 Телефон: ${answers.phone || '-'}`);
   lines.push(`Финальное действие: ${finalAction || 'Не выбрано'}`);
   return lines.join('\n');
 }
@@ -399,6 +258,8 @@ async function beginQuiz(ctx, startMessage) {
   const session = getSession(ctx.from.id);
 
   resetSessionForRestart(session);
+  session.answers = session.answers || {};
+  delete session.answers.phone;
 
   const dbSession = storage.createSession(ctx.from.id);
   session.dbSessionId = dbSession.id;
@@ -423,10 +284,7 @@ async function scheduleFinalResult(ctx, session) {
     session.finalScheduled = false;
     session.finalResultSent = true;
 
-    await ctx.replyWithPhoto(
-      { source: path.join(__dirname, "../assets/marina.jpg") }
-    );
-    const sent = await safeReply(ctx, FINAL_TEXT, finalKeyboard(), 'final-result');
+    const sent = await sendMessageWithRetry(ctx.chat.id, FINAL_TEXT, finalKeyboard(), 'final-result');
     if (!sent) {
       console.error('[final-result] failed after retries', { userId: ctx.from.id });
     }
@@ -476,10 +334,26 @@ bot.action(/ans:(\d+):(\d+)/, async (ctx) => {
     return;
   }
 
-  session.step = QUESTIONS.length + 1;
+  session.step = PHONE_STEP;
   markStepInDb(session);
-  await safeReply(ctx, 'Поняла 💛 Сейчас всё подготовлю…', undefined, 'q7-feedback');
-  await scheduleFinalResult(ctx, session);
+  await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-after-q7');
+});
+
+bot.on('message', async (ctx, next) => {
+  if (!ctx.from || !ctx.message) {
+    await next();
+    return;
+  }
+
+  const session = getSession(ctx.from.id);
+  const isTextMessage = Boolean(ctx.message.text);
+
+  if (session.step === PHONE_STEP && !isTextMessage) {
+    await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-repeat-non-text');
+    return;
+  }
+
+  await next();
 });
 
 async function finishFinalAction(ctx, actionName) {
@@ -516,7 +390,7 @@ bot.action('final_question', async (ctx) => {
     return;
   }
 
-  await safeReply(ctx, 'Напишите свой вопрос специалисту сюда 👇', marinaLinkKeyboard(), 'final-question');
+  await safeReply(ctx, 'Напиши свой вопрос Марине сюда 👇', marinaLinkKeyboard(), 'final-question');
 });
 
 bot.action('final_think', async (ctx) => {
@@ -525,7 +399,7 @@ bot.action('final_think', async (ctx) => {
     return;
   }
 
-  await safeReply(ctx, 'Окей 😊 Я рядом, если захочешь вернуться.', undefined, 'final-think');
+  await safeReply(ctx, 'Окей 💛 Я рядом, если захочешь вернуться.', undefined, 'final-think');
 });
 
 bot.action('restart_quiz', async (ctx) => {
@@ -544,6 +418,21 @@ bot.on('text', async (ctx) => {
 
   if (session.step >= 1 && session.step <= QUESTIONS.length) {
     await safeReply(ctx, 'Выбери вариант кнопкой в вопросе выше 👇', undefined, 'text-during-quiz');
+    return;
+  }
+
+  if (session.step === PHONE_STEP) {
+    const phone = text.trim();
+    if (!phone) {
+      await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-repeat-empty');
+      return;
+    }
+
+    session.answers.phone = phone;
+    session.step = FINAL_STEP;
+    markStepInDb(session);
+    await safeReply(ctx, 'Поняла 💛 Сейчас всё подготовлю…', undefined, 'q7-feedback');
+    await scheduleFinalResult(ctx, session);
     return;
   }
 
