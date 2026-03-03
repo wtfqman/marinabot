@@ -524,17 +524,20 @@ async function finishFinalAction(ctx, actionName) {
 }
 
 bot.action('final_book', async (ctx) => {
-  const ok = await finishFinalAction(ctx, 'Записаться');
-  if (!ok) {
+  const session = getSession(ctx.from.id);
+
+  if (!session.finalResultSent) {
+    await safeAnswerCallback(ctx, 'Сначала дождись итогового сообщения');
     return;
   }
 
-  await safeReply(
-    ctx,
-    'Отлично ❤️ Вот ссылка, чтобы написать специалисту:',
-    marinaLinkKeyboard(),
-    'final-book'
-  );
+  session.awaitingPhone = true;
+  session.pendingLeadAction = 'consultation';
+  session.lastFinalKeyboardChatId = ctx.chat?.id || null;
+  session.lastFinalKeyboardMessageId = ctx.callbackQuery?.message?.message_id || null;
+
+  await safeAnswerCallback(ctx);
+  await safeReply(ctx, 'Пожалуйста, введите ваш номер телефона, чтобы мы могли связаться с вами.', undefined, 'final-book-phone-request');
 });
 
 bot.action('final_question', async (ctx) => {
@@ -568,6 +571,45 @@ bot.on('text', async (ctx) => {
   }
 
   const session = getSession(ctx.from.id);
+
+  if (session.awaitingPhone === true && session.pendingLeadAction === 'consultation') {
+    const phoneText = text.trim();
+    if (!phoneText) {
+      await safeReply(ctx, 'Пожалуйста, отправьте номер телефона текстом.', undefined, 'consultation-phone-empty');
+      return;
+    }
+
+    session.phone = phoneText;
+    session.answers.phone = phoneText;
+
+    const summaryBase = buildLeadSummary(ctx.from, session.answers, 'Записаться');
+    const summary = `${summaryBase}\nТелефон: ${phoneText}`;
+
+    if (session.dbSessionId && !storage.hasLeadForSession(session.dbSessionId)) {
+      storage.insertLead(session.dbSessionId, ctx.from.id, summary);
+    }
+
+    if (!LEADS_CHAT_ID) {
+      console.warn('[lead] LEADS_CHAT_ID is not set, skip lead sending');
+    } else {
+      const sent = await sendMessageWithRetry(LEADS_CHAT_ID, summary, undefined, 'lead-send-consultation');
+      if (!sent) {
+        console.warn('[lead] failed to send lead into LEADS_CHAT_ID');
+      }
+    }
+
+    session.leadSent = true;
+    session.awaitingPhone = false;
+    session.pendingLeadAction = null;
+    if (session.lastFinalKeyboardChatId && session.lastFinalKeyboardMessageId) {
+      await safeClearKeyboard(session.lastFinalKeyboardChatId, session.lastFinalKeyboardMessageId);
+    }
+    session.lastFinalKeyboardChatId = null;
+    session.lastFinalKeyboardMessageId = null;
+
+    await safeReply(ctx, 'Спасибо! Я передала заявку. Специалист свяжется с вами.', undefined, 'consultation-phone-thanks');
+    return;
+  }
 
   if (session.step >= 1 && session.step <= QUESTIONS.length) {
     await safeReply(ctx, 'Выбери вариант кнопкой в вопросе выше 👇', undefined, 'text-during-quiz');
