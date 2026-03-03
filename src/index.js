@@ -85,10 +85,6 @@ const QUESTIONS = [
   }
 ];
 
-const PHONE_STEP = QUESTIONS.length + 1;
-const FINAL_STEP = PHONE_STEP + 1;
-const PHONE_REQUEST_TEXT = 'Пожалуйста, оставьте ваш номер телефона, чтобы специалист мог с вами связаться.';
-
 const FINAL_TEXT = [
   '✨ Спасибо, что прошла мини-тест.',
   '',
@@ -487,26 +483,10 @@ bot.action(/ans:(\d+):(\d+)/, async (ctx) => {
     return;
   }
 
-  session.step = PHONE_STEP;
+  session.step = QUESTIONS.length + 1;
   markStepInDb(session);
-  await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-after-q7');
-});
-
-bot.on('message', async (ctx, next) => {
-  if (!ctx.from || !ctx.message) {
-    await next();
-    return;
-  }
-
-  const session = getSession(ctx.from.id);
-  const isTextMessage = Boolean(ctx.message.text);
-
-  if (session.step === PHONE_STEP && !isTextMessage) {
-    await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-repeat-non-text');
-    return;
-  }
-
-  await next();
+  await safeReply(ctx, 'Поняла 💛 Сейчас всё подготовлю…', undefined, 'q7-feedback');
+  await scheduleFinalResult(ctx, session);
 });
 
 async function finishFinalAction(ctx, actionName) {
@@ -601,6 +581,13 @@ bot.on('text', async (ctx) => {
     session.leadSent = true;
     session.awaitingPhone = false;
     session.pendingLeadAction = null;
+    if (typeof ctx.editMessageReplyMarkup === 'function') {
+      try {
+        await ctx.editMessageReplyMarkup(null);
+      } catch {
+        // ignore: text update usually cannot edit reply markup directly
+      }
+    }
     if (session.lastFinalKeyboardChatId && session.lastFinalKeyboardMessageId) {
       await safeClearKeyboard(session.lastFinalKeyboardChatId, session.lastFinalKeyboardMessageId);
     }
@@ -613,21 +600,6 @@ bot.on('text', async (ctx) => {
 
   if (session.step >= 1 && session.step <= QUESTIONS.length) {
     await safeReply(ctx, 'Выбери вариант кнопкой в вопросе выше 👇', undefined, 'text-during-quiz');
-    return;
-  }
-
-  if (session.step === PHONE_STEP) {
-    const phone = text.trim();
-    if (!phone) {
-      await safeReply(ctx, PHONE_REQUEST_TEXT, undefined, 'phone-request-repeat-empty');
-      return;
-    }
-
-    session.answers.phone = phone;
-    session.step = FINAL_STEP;
-    markStepInDb(session);
-    await safeReply(ctx, 'Поняла 💛 Сейчас всё подготовлю…', undefined, 'q7-feedback');
-    await scheduleFinalResult(ctx, session);
     return;
   }
 
